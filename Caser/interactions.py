@@ -8,7 +8,7 @@ Classed describing datasets of user-item interactions
 """
 
 import numpy as np
-import pandas as pd
+# import pandas as pd
 
 
 class Interactions(object):
@@ -33,6 +33,10 @@ class Interactions(object):
             for line in file:
                 user_id.append(line.strip().split("::")[0])
                 item_id.append(line.strip().split("::")[1])
+
+        # for testing
+        user_id = user_id[:1000]
+        item_id = item_id[:1000]
 
         # memory can't afford, serial
         # df = pd.read_csv(file_path, sep="::", engine="python",
@@ -116,10 +120,9 @@ class Interactions(object):
                 test_sequences[uid][:] = item_seq[-sequence_length:]
                 test_users[uid] = uid
                 _uid = uid
-            else:
-                sequences[i][:] = item_seq[:sequence_length]
-                sequences_users[i] = uid
-                sequences_targets[i][:] = item_seq[-target_length:]
+            sequences[i][:] = item_seq[:sequence_length]
+            sequences_users[i] = uid
+            sequences_targets[i][:] = item_seq[-target_length:]
 
         self.sequences = SequenceInteractions(sequences_users, sequences, sequences_targets)
         self.test_sequences = SequenceInteractions(test_users, test_sequences)
