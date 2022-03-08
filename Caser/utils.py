@@ -3,86 +3,6 @@
 # @Author  : p1ayer
 # @E-mail  : cskyun_ng@mail.scut.edu.cn
 
-# import pandas as pd
-# import random
-# from tqdm import tqdm
-# from utils_.utils import get_logger, fix_rand
-# fix_rand(2022)
-#
-#
-# def sparse_feature(feat, feat_num, embed_dim: int = 4):
-#     """
-#     create dictionary for sparse_feature
-#     :param feat: feature_name
-#     :param feat_num: the base number of sparse features
-#     :param embed_dim: embedding dimension
-#     :return: A dictionary for sparse_feature
-#     """
-#     return {"feat": feat, "feat_num": feat_num, "embed_dim": embed_dim}
-#
-#
-# def create_implicit_ml_1m_dataset(file, trans_score=2, embed_dim=8, maxlen=40):
-#     """
-#     :param file: string. dataset path
-#     :param trans_score: A scalar.
-#     :param embed_dim: A scalar. latent factor
-#     :param maxlen: max length
-#     :return: user_num, item_num, train_df, test_df
-#     """
-#     logger = get_logger()
-#     logger.info("Data Preprocess Start")
-#     df = pd.read_csv(file, sep="::", engine="python",
-#                      names=["user_id", "item_id", "label", "Timestamp"])
-#     df = df[df.label >= trans_score]
-#     train_data, val_data, test_data = [], [], []
-#     item_id_max = df["item_id"].max()
-#     for user_id, df in tqdm(df[["user_id", "item_id"]].groupby("user_id")):
-#         pos_list = df["item_id"].tolist()
-#
-#         # TODO only the item idx not in the pos_list be the neg?
-#         def generate_neg():
-#             neg = pos_list[0]
-#             while neg in pos_list:
-#                 neg = random.randint(1, item_id_max)
-#             return neg
-#
-#         neg_list = [generate_neg() for _ in range(len(pos_list) + 100)]
-#         for i in range(1, len(pos_list)):
-#             hist_i = pos_list[:i]
-#             while len(hist_i) < maxlen:
-#                 hist_i.insert(0, 0)
-#             if i == len(pos_list) - 1:
-#                 test_data.append([user_id, hist_i, pos_list[i], 1])
-#                 for _neg in neg_list:
-#                     test_data.append([user_id, hist_i, _neg, 0])
-#             elif i == len(pos_list) - 2:
-#                 val_data.append([user_id, hist_i, pos_list[i], 1])
-#                 val_data.append([user_id, hist_i, neg_list[i], 0])
-#             else:
-#                 train_data.append([user_id, hist_i, pos_list[i], 1])
-#                 train_data.append([user_id, hist_i, neg_list[i], 0])
-#     user_num, item_num = df["user_id"].max()+1, df["item_id"].max()+1
-#     feature_columns = [sparse_feature("user_id", user_num, embed_dim),
-#                        sparse_feature("item_id", item_num, embed_dim)]
-#
-#     random.shuffle(train_data)
-#     random.shuffle(val_data)
-#
-#     train = pd.DataFrame(train_data, columns=["user_id", "hist", "target_item", "label"])
-#     val = pd.DataFrame(val_data, columns=["user_id", "hist", "target_item", "label"])
-#     test = pd.DataFrame(test_data, columns=["user_id", "hist", "target_item", "label"])
-#     train_X = [train["user_id"], train["hist"], train["target_item"].values]
-#     train_y = [train["label"]]
-#     val_X = [val["user_id"], val["hist"], val["target_item"].values]
-#     val_y = [val["label"]]
-#     test_X = [test["user_id"], test["hist"], test["target_item"].values]
-#     test_y = [test["label"]]
-#     logger.info("Data Preprocess End")
-#     return feature_columns, train_X, train_y, val_X, val_y, test_X, test_y
-#
-#
-# if __name__ == "__main__":
-#     create_implicit_ml_1m_dataset("../ml-1m/ratings.dat")
 
 import numpy as np
 import torch
@@ -90,6 +10,17 @@ import torch.nn.functional as F
 import random
 
 activator_getter = {"identity": lambda x: x, "relu": F.relu, "tanh": F.tanh, "sigmoid": F.sigmoid}
+
+
+def minibatch(*tensors, **kwargs):
+    batch_size = kwargs.get("batch_size", 128)
+    if len(tensors) == 1:
+        tensors = tensors[0]
+        for i in range(0, len(tensors), batch_size):
+            yield tensors[i:i + batch_size]
+    else:
+        for i in range(0, len(tensors[0]), batch_size):
+            yield tuple(x[i:i + batch_size] for x in tensors)
 
 
 def set_seed(seed, cuda=False):
@@ -103,3 +34,123 @@ def set_seed(seed, cuda=False):
 
 def str2bool(v):
     return v.lower() in "true"
+
+
+def shuffle(*arrays, **kwargs):
+    require_indices = kwargs.get('indices', False)
+
+    if len(set(len(x) for x in arrays)) != 1:
+        raise ValueError('All inputs to shuffle must have '
+                         'the same length.')
+
+    shuffle_indices = np.arange(len(arrays[0]))
+    np.random.shuffle(shuffle_indices)
+
+    if len(arrays) == 1:
+        result = arrays[0][shuffle_indices]
+    else:
+        result = tuple(x[shuffle_indices] for x in arrays)
+
+    if require_indices:
+        return result, shuffle_indices
+    else:
+        return result
+
+
+def _compute_apk(targets, predictions, k):
+
+    if len(predictions) > k:
+        predictions = predictions[:k]
+
+    score = 0.0
+    num_hits = 0.0
+
+    for i, p in enumerate(predictions):
+        if p in targets and p not in predictions[:i]:
+            num_hits += 1.0
+            score += num_hits / (i + 1.0)
+
+    if not list(targets):
+        return 0.0
+
+    return score / min(len(targets), k)
+
+
+def _compute_precision_recall(targets, predictions, k):
+
+    pred = predictions[:k]
+    num_hit = len(set(pred).intersection(set(targets)))
+    precision = float(num_hit) / len(pred)
+    recall = float(num_hit) / len(targets)
+    return precision, recall
+
+
+def evaluate_ranking(model, test, train=None, k=10):
+    """
+    Compute Precision@k, Recall@k scores and average precision (AP).
+    One score is given for every user with interactions in the test
+    set, representing the AP, Precision@k and Recall@k of all their
+    test items.
+
+    Parameters
+    ----------
+
+    model: fitted instance of a recommender model
+        The model to evaluate.
+    test: :class:`spotlight.interactions.Interactions`
+        Test interactions.
+    train: :class:`spotlight.interactions.Interactions`, optional
+        Train interactions. If supplied, rated items in
+        interactions will be excluded.
+    k: int or array of int,
+        The maximum number of predicted items
+    """
+
+    test = test.to_csr()
+
+    if train is not None:
+        train = train.to_csr()
+
+    if not isinstance(k, list):
+        ks = [k]
+    else:
+        ks = k
+
+    precisions = [list() for _ in range(len(ks))]
+    recalls = [list() for _ in range(len(ks))]
+    apks = list()
+
+    for user_id, row in enumerate(test):
+
+        if not len(row.indices):
+            continue
+
+        predictions = -model.predict(user_id)
+        predictions = predictions.argsort()
+
+        if train is not None:
+            rated = set(train[user_id].indices)
+        else:
+            rated = []
+
+        predictions = [p for p in predictions if p not in rated]
+
+        targets = row.indices
+
+        for i, _k in enumerate(ks):
+            precision, recall = _compute_precision_recall(targets, predictions, _k)
+            precisions[i].append(precision)
+            recalls[i].append(recall)
+
+        apks.append(_compute_apk(targets, predictions, k=np.inf))
+
+    precisions = [np.array(i) for i in precisions]
+    recalls = [np.array(i) for i in recalls]
+
+    if not isinstance(k, list):
+        precisions = precisions[0]
+        recalls = recalls[0]
+
+    mean_aps = np.mean(apks)
+
+    return precisions, recalls, mean_aps

@@ -8,7 +8,8 @@ Classed describing datasets of user-item interactions
 """
 
 import numpy as np
-# import pandas as pd
+import scipy.sparse as sp
+import pandas as pd
 
 
 class Interactions(object):
@@ -31,19 +32,17 @@ class Interactions(object):
 
         with open(file_path, "r") as file:
             for line in file:
-                user_id.append(line.strip().split("::")[0])
-                item_id.append(line.strip().split("::")[1])
+                user_id.append(line.strip().split(" ")[0])
+                item_id.append(line.strip().split(" ")[1])
 
         # for testing
-        user_id = user_id[:1000]
-        item_id = item_id[:1000]
+        # user_id = user_id[:1000]
+        # item_id = item_id[:1000]
 
-        # memory can't afford, serial
-        # df = pd.read_csv(file_path, sep="::", engine="python",
-        #                  names=["user_id", "item_id", "rating", "timestamp"]).sort_values(
-        #                  by="timestamp")[["user_id", "item_id"]]
-        # user_id = df["user_id"].tolist()
-        # item_id = df["item_id"].tolist()
+        # df = pd.read_csv(file_path, sep=",", engine="python",
+        #                  names=["user_id", "item_id", "rating", "timestamp"])
+        # user_id = df["user_id"].tolist()[:10000]
+        # item_id = df["item_id"].tolist()[:10000]
         # del df
 
         # in order to compress the user embedding
@@ -69,10 +68,28 @@ class Interactions(object):
         self.item2id = item2id
 
         self.sequences = None
-        self.test_sequences = None
+        self.test_sequences = None  # used to predict
 
     def __len__(self):
         return len(self.user_id)
+
+    def to_coo(self):
+        """
+        Transform to a scipy.sparse COO matrix.
+        """
+
+        row = self.user_id
+        col = self.item_id
+        data = np.ones(len(self))
+
+        return sp.coo_matrix((data, (row, col)),
+                             shape=(self.num_user, self.num_item))
+
+    def to_csr(self):
+        """
+        Transform to a scipy.sparse CSR matrix.
+        """
+        return self.to_coo().tocsr()
 
     def to_seq(self,
                sequence_length: int = 5,
@@ -169,8 +186,8 @@ def _generate_sequences(user_id, item_id, indices, max_sequence_length):
 
 
 if __name__ == "__main__":
-    file_path = "../ml-1m/ratings.dat"
-    dataset = Interactions(file_path)
+    _file_path = "../ml-1m/train.csv"
+    dataset = Interactions(_file_path)
     dataset.to_seq()
     print(dataset.sequences.user_id.shape,
           dataset.sequences.sequences.shape,

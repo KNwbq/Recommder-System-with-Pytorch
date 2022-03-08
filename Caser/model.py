@@ -60,7 +60,7 @@ class Caser(nn.Module):
             if isinstance(m, (nn.Conv2d, nn.Embedding, nn.Linear)):
                 nn.init.xavier_uniform_(m.weight)
 
-    def forward(self, seq, user, items, _predict):
+    def forward(self, seq, user, items, _predict=True):
         """
         :param seq: (batch_size, max_length)
         :param user: (batch_size, 1)
@@ -84,6 +84,7 @@ class Caser(nn.Module):
             hor_res.append(_hor)
 
         ver_hor = torch.cat((ver_res, torch.cat(hor_res, 1)), 1)
+        ver_hor = self.dropout(ver_hor)
         z = self.ac_fc(self.fc1(ver_hor))
         # (batch_size, 2 * embed_dim, 1)
         z_user = torch.cat((z, emb4user), 1).unsqueeze(2)
@@ -91,7 +92,6 @@ class Caser(nn.Module):
         # (batch_size, len, 2 * embed_dim)
         w2 = self.W2(items)
         b2 = self.b2(items)
-
         res = (w2 @ z_user) + b2
         return res
 
