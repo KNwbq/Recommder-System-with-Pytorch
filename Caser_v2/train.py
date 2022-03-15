@@ -39,7 +39,6 @@ class Recommender(object):
         # rank evaluate related
         self.test_sequence = None
         self._candidate = dict()
-        self.item4user = None
 
     @property
     def _initialized(self):
@@ -63,8 +62,6 @@ class Recommender(object):
         sequences_np = train.sequences.sequences
         targets_np = train.sequences.target
         users_np = train.sequences.user_id.reshape(-1, 1)
-
-        self.item4user = train.num_user
 
         L, T = train.sequences.L, train.sequences.T
 
@@ -101,7 +98,7 @@ class Recommender(object):
                 # print(batch_sequences.size(),
                 #       batch_users.size(),
                 #       items2predict.size())
-                predictions = self._net(batch_sequences, batch_users, items2predict, self.item4user)
+                predictions = self._net(batch_sequences, batch_users, items2predict)
                 (t_pred, n_pred) = torch.split(predictions, [batch_targets.size(1), batch_negatives.size(1)], 1)
                 self._optimizer.zero_grad()
                 pos_loss = -torch.mean(torch.log(torch.sigmoid(t_pred)))
@@ -174,8 +171,7 @@ class Recommender(object):
 
             out = self._net(sequences,
                             user,
-                            items,
-                            self.item4user)
+                            items)
 
         return out.cpu().numpy().flatten()
 
