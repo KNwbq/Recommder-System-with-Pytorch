@@ -7,12 +7,12 @@ import torch
 from torch import nn
 from utils import activator_getter
 import torch.nn.functional as F
+import numpy as np
 
 
 class Caser(nn.Module):
-    def __init__(self, num_users, num_items, model_args):
+    def __init__(self, num_items, model_args):
         """
-        :param num_users: number of user in the system
         :param num_items: number of item in the system
         :param model_args: the parameters of the model, consist of window size L,
         the number of the horizon filter, the number of the vertical filter and the dropout ratio
@@ -21,7 +21,7 @@ class Caser(nn.Module):
         self.args = model_args
 
         L = self.args.L
-        embed_dim = self.args.d
+        self.embed_dim = self.args.d
         self.nh = self.args.nh
         self.nv = self.args.nv
         self.drop_ratio = self.args.drop
@@ -30,49 +30,53 @@ class Caser(nn.Module):
         self.ac_fc = activator_getter[self.args.ac_fc]
 
         # embedding
-        self.user_embedding = nn.Embedding(num_users, embed_dim)
-        self.item_embedding = nn.Embedding(num_items, embed_dim)
+        self.item_embedding = nn.Embedding(num_items, self.embed_dim)
+        # cold start
+        self.avg_user_embedding = nn.Parameter(torch.randn(self.embed_dim, dtype=torch.float32, requires_grad=True))
 
         # vertical convolution
         self.vertical = nn.Conv2d(1, self.nv, (L, 1))
 
         # horizon convolution
-        cnt = self.nh // L
-        lengths = [(i+1) for _ in range(cnt) for i in range(L)]
-        lengths.extend([_ + 1 for _ in range(self.nh - len(lengths))])
-        lengths = sorted(lengths, key=lambda x: x)
-        self.horizon = nn.ModuleList([nn.Conv2d(1, 1, (i, embed_dim)) for i in lengths])
+        lengths = [_+1 for _ in range(L)]
+        self.horizon = nn.ModuleList([nn.Conv2d(1, self.nh, (i, self.embed_dim)) for i in lengths])
 
         # fully-connect1
-        self.fc1_v_dim = self.nv * embed_dim
-        self.fc1_h_dim = self.nh
+        self.fc1_v_dim = self.nv * self.embed_dim
+        self.fc1_h_dim = self.nh * len(lengths)
         self.fc1_dim = self.fc1_v_dim + self.fc1_h_dim
-        self.fc1 = nn.Linear(self.fc1_dim, embed_dim)
+        self.fc1 = nn.Linear(self.fc1_dim, self.embed_dim)
 
         # fully-connect2
-        self.W2 = nn.Embedding(num_items, embed_dim * 2)
+        self.W2 = nn.Embedding(num_items, self.embed_dim * 2)
         self.b2 = nn.Embedding(num_items, 1)
 
         # dropout
         self.dropout = nn.Dropout(self.drop_ratio)
 
-        for m in self.modules():
-            if isinstance(m, (nn.Conv2d, nn.Embedding, nn.Linear)):
-                nn.init.xavier_uniform_(m.weight)
+        # for m in self.modules():
+        #     if isinstance(m, (nn.Conv2d, nn.Embedding, nn.Linear)):
+        #         nn.init.xavier_uniform_(m.weight)
+        # self.user_embedding.weight.data.normal_(0, 1.0 / self.user_embedding.embedding_dim)
+        self.item_embedding.weight.data.normal_(0, 1.0 / self.item_embedding.embedding_dim)
+        self.W2.weight.data.normal_(0, 1.0 / self.W2.embedding_dim)
+        self.b2.weight.data.zero_()
 
-    def forward(self, seq, user, items, _predict=True):
+    def forward(self, seq, items, item4user, _predict=True):
         """
         :param seq: (batch_size, max_length)
-        :param user: (batch_size, 1)
         :param items: the desired item; (batch_size, len)
+        :param item4user: a dictionary that contains records of user
         :param _predict: predict or not
         :return: the probability of each items that will be chosen
         """
         emb4item = self.item_embedding(seq)  # (batch_size, H, W): (batch_size, L, embed_dim)
-        emb4user = self.user_embedding(user)  # (batch_size, H, W): (batch_size, 1, embed_dim)
+        # emb4user = torch.cat([torch.mean(self.item_embedding(torch.from_numpy(item4user[u.item()]).to(device)), dim=0) for u in user], dim=0).view(-1, emb4item.size(-1))
+        emb4user = torch.cat([torch.mean(self.item_embedding(i), dim=0) for i in item4user], dim=0).view(-1, self.embed_dim) + self.avg_user_embedding
+        # emb4user = self.user_embedding(user)  # (batch_size, H, W): (batch_size, 1, embed_dim)
 
         emb4item = torch.unsqueeze(emb4item, 1)  # (batch_size, 1, L, embed_dim)
-        emb4user = torch.squeeze(emb4user, 1)  # (batch_size, embed_dim)
+        # emb4user = torch.squeeze(emb4user, 1)  # (batch_size, embed_dim)
 
         ver_res = self.vertical(emb4item)  # (batch_size, nv, 1, embed_dim)
         ver_res = ver_res.view(ver_res.size(0), -1)
@@ -90,10 +94,24 @@ class Caser(nn.Module):
         z_user = torch.cat((z, emb4user), 1).unsqueeze(2)
 
         # (batch_size, len, 2 * embed_dim)
+        # w2 = self.W2(items)
+        # b2 = self.b2(items)
+        # res = (w2 @ z_user) + b2
+
         w2 = self.W2(items)
         b2 = self.b2(items)
+        # tag tag
         res = (w2 @ z_user) + b2
-        return res
+
+        # w2 = self.W2(items)
+        # b2 = self.b2(items)
+        # if _predict:
+        #     w2 = w2.squeeze()
+        #     b2 = b2.squeeze()
+        #     res = (z_user * w2).sum(1) + b2
+        # else:
+        #     res = torch.baddbmm(b2, w2, z_user.unsqueeze(2)).squeeze()
+        return res.squeeze(-1)
 
 
 if __name__ == "__main__":
@@ -115,5 +133,5 @@ if __name__ == "__main__":
     model_parser.add_argument('--ac_fc', type=str, default='relu')
     model_parser.add_argument("--L", type=int, default=5)
     model_config = model_parser.parse_args()
-    net = Caser(ds.num_user, ds.num_item, model_config)
+    net = Caser(ds.num_user, model_config)
     _ = net(test_seq, test_user, test_item, True)

@@ -30,6 +30,7 @@ class Caser(nn.Module):
         self.ac_fc = activator_getter[self.args.ac_fc]
 
         # embedding
+        # a difference is the user embedding is the sum of his or her item embedding
         self.user_embedding = nn.Embedding(num_users, embed_dim)
         self.item_embedding = nn.Embedding(num_items, embed_dim)
 
@@ -37,15 +38,12 @@ class Caser(nn.Module):
         self.vertical = nn.Conv2d(1, self.nv, (L, 1))
 
         # horizon convolution
-        cnt = self.nh // L
-        lengths = [(i+1) for _ in range(cnt) for i in range(L)]
-        lengths.extend([_ + 1 for _ in range(self.nh - len(lengths))])
-        lengths = sorted(lengths, key=lambda x: x)
-        self.horizon = nn.ModuleList([nn.Conv2d(1, 1, (i, embed_dim)) for i in lengths])
+        lengths = [_+1 for _ in range(L)]
+        self.horizon = nn.ModuleList([nn.Conv2d(1, self.nh, (i, embed_dim)) for i in lengths])
 
         # fully-connect1
         self.fc1_v_dim = self.nv * embed_dim
-        self.fc1_h_dim = self.nh
+        self.fc1_h_dim = self.nh * len(lengths)
         self.fc1_dim = self.fc1_v_dim + self.fc1_h_dim
         self.fc1 = nn.Linear(self.fc1_dim, embed_dim)
 
@@ -56,9 +54,13 @@ class Caser(nn.Module):
         # dropout
         self.dropout = nn.Dropout(self.drop_ratio)
 
-        for m in self.modules():
-            if isinstance(m, (nn.Conv2d, nn.Embedding, nn.Linear)):
-                nn.init.xavier_uniform_(m.weight)
+        # for m in self.modules():
+        #     if isinstance(m, (nn.Conv2d, nn.Embedding, nn.Linear)):
+        #         nn.init.xavier_uniform_(m.weight)
+        self.user_embedding.weight.data.normal_(0, 1.0 / self.user_embedding.embedding_dim)
+        self.item_embedding.weight.data.normal_(0, 1.0 / self.item_embedding.embedding_dim)
+        self.W2.weight.data.normal_(0, 1.0 / self.W2.embedding_dim)
+        self.b2.weight.data.zero_()
 
     def forward(self, seq, user, items, _predict=True):
         """
@@ -79,7 +81,7 @@ class Caser(nn.Module):
         hor_res = []
         for conv in self.horizon:
             # (batch_size, 1, L-i+1)
-            _hor = self.ac_conv(conv(emb4item)).squeeze(3)
+            _hor = self.ac_conv(conv(emb4item).squeeze(3))
             _hor = F.max_pool1d(_hor, _hor.size(2)).squeeze(2)
             hor_res.append(_hor)
 
@@ -92,8 +94,18 @@ class Caser(nn.Module):
         # (batch_size, len, 2 * embed_dim)
         w2 = self.W2(items)
         b2 = self.b2(items)
+        # tag tag
         res = (w2 @ z_user) + b2
-        return res
+
+        # w2 = self.W2(items)
+        # b2 = self.b2(items)
+        # if _predict:
+        #     w2 = w2.squeeze()
+        #     b2 = b2.squeeze()
+        #     res = (z_user * w2).sum(1) + b2
+        # else:
+        #     res = torch.baddbmm(b2, w2, z_user.unsqueeze(2)).squeeze()
+        return res.squeeze(-1)
 
 
 if __name__ == "__main__":

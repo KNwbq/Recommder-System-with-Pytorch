@@ -5,6 +5,8 @@
 
 import argparse
 from time import time
+from sklearn.utils import shuffle
+
 from model import Caser
 from torch import optim
 from utils import *
@@ -36,7 +38,7 @@ class Recommender(object):
         self._neg_samples = neg_samples
         self._device = torch.device("cuda" if use_cuda else "cpu")
 
-        # rank evaluate related
+        # rank evaluation related
         self.test_sequence = None
         self._candidate = dict()
 
@@ -50,8 +52,7 @@ class Recommender(object):
 
         self.test_sequence = interactions.test_sequences
 
-        self._net = Caser(self._num_users,
-                          self._num_items,
+        self._net = Caser(self._num_items,
                           self.model_args).to(self._device)
 
         self._optimizer = optim.Adam(self._net.parameters(),
@@ -59,15 +60,29 @@ class Recommender(object):
                                      lr=self._learning_rate)
 
     def fit(self, train, test, verbose=False):
+        """
+        The general training loop to fit the model
+
+        Parameters
+        ----------
+
+        train: :class:`spotlight.interactions.Interactions`
+            training instances, also contains test sequences
+        test: :class:`spotlight.interactions.Interactions`
+            only contains targets for test sequences
+        verbose: bool, optional
+            print the logs
+        """
+
+        # convert to sequences, targets and users
         sequences_np = train.sequences.sequences
         targets_np = train.sequences.target
         users_np = train.sequences.user_id.reshape(-1, 1)
-
-        L, T = train.sequences.L, train.sequences.T
+        item4user_np = train.sequences.item4user
 
         n_train = sequences_np.shape[0]
 
-        output_str = "total training instances: {}".format(n_train)
+        output_str = 'total training instances: %d' % n_train
         print(output_str)
 
         if not self._initialized:
@@ -78,12 +93,15 @@ class Recommender(object):
         for epoch_num in range(start_epoch, self._n_iter):
             t1 = time()
 
-            users_np, sequences_np, targets_np = shuffle(users_np, sequences_np, targets_np)
+            # set model to training mode
+            self._net.train()
+            users_np, sequences_np, targets_np, item4user_np = shuffle(users_np, sequences_np, targets_np, item4user_np)
             neg_samples = self._generate_negative_samples(users_np, train, self._neg_samples)
-            users, sequences, targets, negatives = (torch.from_numpy(users_np).to(self._device),
-                                                    torch.from_numpy(sequences_np).to(self._device),
-                                                    torch.from_numpy(targets_np).to(self._device),
-                                                    torch.from_numpy(neg_samples).to(self._device))
+            users, sequences, targets, negatives, item4user = (torch.from_numpy(users_np).to(self._device),
+                                                               torch.from_numpy(sequences_np).to(self._device),
+                                                               torch.from_numpy(targets_np).to(self._device),
+                                                               torch.from_numpy(neg_samples).to(self._device),
+                                                               [torch.from_numpy(_).to(self._device) for _ in item4user_np])
 
             epoch_loss = 0.0
             minibatch_num = 0
@@ -91,14 +109,15 @@ class Recommender(object):
                  (batch_users,
                   batch_sequences,
                   batch_targets,
-                  batch_negatives)) in enumerate(tqdm(minibatch(users, sequences, targets, negatives))):
+                  batch_negatives,
+                  batch_item4user)) in enumerate(tqdm(minibatch(users, sequences, targets, negatives, item4user, batch_size=self._batch_size))):
 
                 items2predict = torch.cat((batch_targets, batch_negatives), 1)
                 # print(targets.size(), negatives.size())
                 # print(batch_sequences.size(),
                 #       batch_users.size(),
                 #       items2predict.size())
-                predictions = self._net(batch_sequences, batch_users, items2predict)
+                predictions = self._net(batch_sequences, items2predict, batch_item4user)
                 (t_pred, n_pred) = torch.split(predictions, [batch_targets.size(1), batch_negatives.size(1)], 1)
                 self._optimizer.zero_grad()
                 pos_loss = -torch.mean(torch.log(torch.sigmoid(t_pred)))
@@ -157,6 +176,7 @@ class Recommender(object):
         with torch.no_grad():
             sequences_np = self.test_sequence.sequences[user_id, :]
             sequences_np = np.atleast_2d(sequences_np)
+            item4user_np = self.test_sequence.item4user[user_id]
 
             if item_ids is None:
                 item_ids = np.arange(self._num_items).reshape(-1, 1)
@@ -164,14 +184,16 @@ class Recommender(object):
             sequences = torch.from_numpy(sequences_np).long()
             item_ids = torch.from_numpy(item_ids).long()
             user_id = torch.from_numpy(np.array([[user_id]])).long()
+            item4user = torch.from_numpy(item4user_np).long()
 
-            user, sequences, items = (user_id.to(self._device),
-                                      sequences.to(self._device),
-                                      item_ids.to(self._device))
+            user, sequences, items, item4user = (user_id.to(self._device),
+                                                 sequences.to(self._device),
+                                                 item_ids.to(self._device),
+                                                 item4user.to(self._device))
 
             out = self._net(sequences,
-                            user,
-                            items)
+                            items,
+                            [item4user])
 
         return out.cpu().numpy().flatten()
 

@@ -36,7 +36,7 @@ def str2bool(v):
     return v.lower() in "true"
 
 
-def shuffle(*arrays, **kwargs):
+def my_shuffle(*arrays, **kwargs):
     require_indices = kwargs.get('indices', False)
 
     if len(set(len(x) for x in arrays)) != 1:

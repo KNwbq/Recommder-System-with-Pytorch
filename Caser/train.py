@@ -14,12 +14,12 @@ from tqdm import tqdm
 
 class Recommender(object):
     def __init__(self,
-                 n_iter: int = 1,
-                 batch_size: int = 64,
-                 l2: float = 0.0,
-                 neg_samples: int = 1,
-                 learning_rate: float = 0.01,
-                 use_cuda: bool = False,
+                 n_iter=None,
+                 batch_size=None,
+                 l2=None,
+                 neg_samples=None,
+                 learning_rate=None,
+                 use_cuda=False,
                  model_args=None):
 
         # model related
@@ -36,10 +36,9 @@ class Recommender(object):
         self._neg_samples = neg_samples
         self._device = torch.device("cuda" if use_cuda else "cpu")
 
-        # rank evaluate related
+        # rank evaluation related
         self.test_sequence = None
         self._candidate = dict()
-        self.item4user = None
 
     @property
     def _initialized(self):
@@ -60,17 +59,28 @@ class Recommender(object):
                                      lr=self._learning_rate)
 
     def fit(self, train, test, verbose=False):
+        """
+        The general training loop to fit the model
+
+        Parameters
+        ----------
+
+        train: :class:`spotlight.interactions.Interactions`
+            training instances, also contains test sequences
+        test: :class:`spotlight.interactions.Interactions`
+            only contains targets for test sequences
+        verbose: bool, optional
+            print the logs
+        """
+
+        # convert to sequences, targets and users
         sequences_np = train.sequences.sequences
         targets_np = train.sequences.target
         users_np = train.sequences.user_id.reshape(-1, 1)
 
-        self.item4user = train.num_user
-
-        L, T = train.sequences.L, train.sequences.T
-
         n_train = sequences_np.shape[0]
 
-        output_str = "total training instances: {}".format(n_train)
+        output_str = 'total training instances: %d' % n_train
         print(output_str)
 
         if not self._initialized:
@@ -81,12 +91,15 @@ class Recommender(object):
         for epoch_num in range(start_epoch, self._n_iter):
             t1 = time()
 
+            # set model to training mode
+            self._net.train()
+
             users_np, sequences_np, targets_np = shuffle(users_np, sequences_np, targets_np)
             neg_samples = self._generate_negative_samples(users_np, train, self._neg_samples)
-            users, sequences, targets, negatives = (torch.from_numpy(users_np).to(self._device),
-                                                    torch.from_numpy(sequences_np).to(self._device),
-                                                    torch.from_numpy(targets_np).to(self._device),
-                                                    torch.from_numpy(neg_samples).to(self._device))
+            users, sequences, targets, negatives = (torch.from_numpy(users_np).long().to(self._device),
+                                                    torch.from_numpy(sequences_np).long().to(self._device),
+                                                    torch.from_numpy(targets_np).long().to(self._device),
+                                                    torch.from_numpy(neg_samples).long().to(self._device))
 
             epoch_loss = 0.0
             minibatch_num = 0
@@ -94,14 +107,14 @@ class Recommender(object):
                  (batch_users,
                   batch_sequences,
                   batch_targets,
-                  batch_negatives)) in enumerate(tqdm(minibatch(users, sequences, targets, negatives))):
+                  batch_negatives)) in enumerate(tqdm(minibatch(users, sequences, targets, negatives, batch_size=self._batch_size))):
 
                 items2predict = torch.cat((batch_targets, batch_negatives), 1)
                 # print(targets.size(), negatives.size())
                 # print(batch_sequences.size(),
                 #       batch_users.size(),
                 #       items2predict.size())
-                predictions = self._net(batch_sequences, batch_users, items2predict, self.item4user)
+                predictions = self._net(batch_sequences, batch_users, items2predict)
                 (t_pred, n_pred) = torch.split(predictions, [batch_targets.size(1), batch_negatives.size(1)], 1)
                 self._optimizer.zero_grad()
                 pos_loss = -torch.mean(torch.log(torch.sigmoid(t_pred)))
@@ -174,8 +187,7 @@ class Recommender(object):
 
             out = self._net(sequences,
                             user,
-                            items,
-                            self.item4user)
+                            items)
 
         return out.cpu().numpy().flatten()
 

@@ -4,12 +4,13 @@
 # @E-mail  : cskyun_ng@mail.scut.edu.cn
 
 """
-Classed describing datasets of user-item interactions
+Classes describing datasets of user-item interactions. Instances of these
+are returned by dataset-fetching and dataset-processing functions.
 """
 
 import numpy as np
+
 import scipy.sparse as sp
-import pandas as pd
 
 
 class Interactions(object):
@@ -88,6 +89,7 @@ class Interactions(object):
     def to_csr(self):
         """
         Transform to a scipy.sparse CSR matrix.
+        :return the user_item matrix
         """
         return self.to_coo().tocsr()
 
@@ -165,9 +167,6 @@ def _sliding_window(tensor, window_size, step_size=1):
         for i in range(len(tensor), 0, -step_size):
             if i - window_size >= 0:
                 yield tensor[i-window_size:i]
-            # elif i >= 1:
-            #     num_padding = window_size - i
-            #     yield np.pad(tensor[:i], (num_padding, 0), "constant")
     else:
         num_padding = window_size - len(tensor)
         yield np.pad(tensor, (num_padding, 0), "constant")
@@ -175,6 +174,7 @@ def _sliding_window(tensor, window_size, step_size=1):
 
 def _generate_sequences(user_id, item_id, indices, max_sequence_length):
     for i in range(len(indices)):
+        userId = user_id[i]
         start_idx = indices[i]
         if i + 1 < len(indices):
             stop_idx = indices[i+1]
@@ -182,11 +182,11 @@ def _generate_sequences(user_id, item_id, indices, max_sequence_length):
             stop_idx = None
 
         for seq in _sliding_window(item_id[start_idx:stop_idx], max_sequence_length):
-            yield user_id[i], seq
+            yield userId, seq
 
 
 if __name__ == "__main__":
-    _file_path = "../ml-1m/train.csv"
+    _file_path = "../ml-1m/train.txt"
     dataset = Interactions(_file_path)
     dataset.to_seq()
     print(dataset.sequences.user_id.shape,

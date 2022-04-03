@@ -9,7 +9,6 @@ Classed describing datasets of user-item interactions
 
 import numpy as np
 import scipy.sparse as sp
-import pandas as pd
 
 
 class Interactions(object):
@@ -88,6 +87,7 @@ class Interactions(object):
     def to_csr(self):
         """
         Transform to a scipy.sparse CSR matrix.
+        :return the user_item matrix
         """
         return self.to_coo().tocsr()
 
@@ -127,32 +127,38 @@ class Interactions(object):
         sequences = np.zeros((num_subsequence, sequence_length), dtype=np.int64)
         sequences_targets = np.zeros((num_subsequence, target_length), dtype=np.int64)
         sequences_users = np.empty(num_subsequence, dtype=np.int64)
+        sequences_item4user = []
 
         test_sequences = np.zeros((self.num_user, sequence_length), dtype=np.int64)
         test_users = np.empty(self.num_user, dtype=np.int64)
+        test_item4user = {}
 
         _uid = None
-        for i, (uid, item_seq) in enumerate(_generate_sequences(user_id, item_id, indices, max_seq)):
+        for i, (uid, item_seq, item_clicked) in enumerate(_generate_sequences(user_id, item_id, indices, max_seq)):
             if uid != _uid:
                 test_sequences[uid][:] = item_seq[-sequence_length:]
                 test_users[uid] = uid
                 _uid = uid
+                test_item4user[uid] = item_clicked
             sequences[i][:] = item_seq[:sequence_length]
             sequences_users[i] = uid
             sequences_targets[i][:] = item_seq[-target_length:]
+            sequences_item4user.append(item_clicked[:-target_length])
 
-        self.sequences = SequenceInteractions(sequences_users, sequences, sequences_targets)
-        self.test_sequences = SequenceInteractions(test_users, test_sequences)
+        self.sequences = SequenceInteractions(sequences_users, sequences, sequences_targets, sequences_item4user)
+        self.test_sequences = SequenceInteractions(test_users, test_sequences, item4user=test_item4user)
 
 
 class SequenceInteractions(object):
     def __init__(self,
                  user_id,
                  sequences,
-                 targets=None):
+                 targets=None,
+                 item4user=None):
         self.user_id = user_id
         self.sequences = sequences
         self.target = targets
+        self.item4user = item4user
 
         self.L = sequences.shape[1]
         self.T = None
@@ -164,29 +170,27 @@ def _sliding_window(tensor, window_size, step_size=1):
     if len(tensor) - window_size >= 0:
         for i in range(len(tensor), 0, -step_size):
             if i - window_size >= 0:
-                yield tensor[i-window_size:i]
-            # elif i >= 1:
-            #     num_padding = window_size - i
-            #     yield np.pad(tensor[:i], (num_padding, 0), "constant")
+                yield tensor[i-window_size:i], tensor[:i]
     else:
         num_padding = window_size - len(tensor)
-        yield np.pad(tensor, (num_padding, 0), "constant")
+        yield np.pad(tensor, (num_padding, 0), "constant"), tensor[:]
 
 
 def _generate_sequences(user_id, item_id, indices, max_sequence_length):
     for i in range(len(indices)):
+        userId = user_id[i]
         start_idx = indices[i]
         if i + 1 < len(indices):
             stop_idx = indices[i+1]
         else:
             stop_idx = None
 
-        for seq in _sliding_window(item_id[start_idx:stop_idx], max_sequence_length):
-            yield user_id[i], seq
+        for seq, item4user in _sliding_window(item_id[start_idx:stop_idx], max_sequence_length):
+            yield userId, seq, np.array(item4user)
 
 
 if __name__ == "__main__":
-    _file_path = "../ml-1m/train.csv"
+    _file_path = "../ml-1m/train.txt"
     dataset = Interactions(_file_path)
     dataset.to_seq()
     print(dataset.sequences.user_id.shape,
